@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Gym Coach · 深蹲计数 Demo</title>
+<style>
+  :root{
+    --accent:#19f0c8;
+    --accent2:#3a8dff;
+    --bg:#05080f;
+    --good:#19f0c8;
+    --warn:#ffcc4d;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  html,body{height:100%;background:var(--bg);color:#fff;overflow:hidden;}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  /* video + canvas 都镜像,形成自拍效果 */
+  #video{position:absolute;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);filter:brightness(.7) saturate(1.1);}
+  #overlay{position:absolute;width:100%;height:100%;}
+  /* 顶部 HUD */
+  #hud{position:absolute;top:0;left:0;right:0;padding:18px 22px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:5;}
+  .brand{font-weight:700;letter-spacing:.5px;font-size:15px;}
+  .brand b{color:var(--accent);}
+  .brand span{display:block;font-weight:400;font-size:11px;color:#8aa;letter-spacing:2px;margin-top:2px;}
+  .status-pill{font-size:12px;padding:6px 12px;border:1px solid rgba(255,255,255,.2);border-radius:20px;background:rgba(0,0,0,.35);backdrop-filter:blur(6px);}
+  .status-pill.live{color:var(--accent);border-color:var(--accent);}
+  /* 计数面板 */
+  #panel{position:absolute;left:22px;bottom:26px;z-index:5;background:rgba(5,8,15,.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:18px 22px;min-width:188px;}
+  #reps{font-size:64px;font-weight:800;line-height:1;background:linear-gradient(120deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent;}
+  #reps-label{font-size:12px;color:#8aa;letter-spacing:3px;margin-top:4px;}
+  .metrics{display:flex;gap:18px;margin-top:14px;}
+  .metric .v{font-size:20px;font-weight:600;}
+  .metric .k{font-size:10px;color:#8aa;letter-spacing:1px;margin-top:2px;}
+  #stateText{font-size:13px;margin-top:12px;font-weight:600;}
+  #tip{font-size:12px;color:var(--warn);margin-top:6px;min-height:16px;}
+  /* 深度条 */
+  #depthWrap{position:absolute;right:22px;bottom:26px;z-index:5;height:200px;width:14px;background:rgba(255,255,255,.08);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,.12);}
+  #depthFill{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(0deg,var(--accent),var(--accent2));height:0%;transition:height .08s linear;}
+  #depthLabel{position:absolute;right:40px;bottom:26px;z-index:5;font-size:10px;color:#8aa;writing-mode:vertical-rl;letter-spacing:2px;}
+  /* 遮罩 */
+  #cover{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:radial-gradient(circle at 50% 40%,#0a1424,#05080f);gap:16px;padding:30px;}
+  #cover h1{font-size:26px;font-weight:800;}
+  #cover h1 b{color:var(--accent);}
+  #cover p{color:#9ab;font-size:14px;max-width:420px;line-height:1.6;}
+  #startBtn{margin-top:8px;padding:14px 34px;font-size:16px;font-weight:700;color:#03110d;background:linear-gradient(120deg,var(--accent),var(--accent2));border:none;border-radius:30px;cursor:pointer;box-shadow:0 8px 30px rgba(25,240,200,.3);}
+  #startBtn:active{transform:scale(.97);}
+  .spinner{width:34px;height:34px;border:3px solid rgba(255,255,255,.15);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .hint{font-size:12px;color:#678;max-width:420px;line-height:1.6;}
+  .err{color:#ff7a7a;font-size:13px;max-width:420px;line-height:1.6;}
+  .hidden{display:none!important;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+
+  <div id="hud">
+    <div class="brand">AI <b>GYM</b> COACH<span>POSE · DEMO</span></div>
+    <div class="status-pill" id="statusPill">待启动</div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div id="reps">0</div>
+    <div id="reps-label">SQUATS · 深蹲次数</div>
+    <div class="metrics">
+      <div class="metric"><div class="v" id="angleVal">--°</div><div class="k">膝关节角度</div></div>
+      <div class="metric"><div class="v" id="fpsVal">--</div><div class="k">FPS</div></div>
+    </div>
+    <div id="stateText">准备中…</div>
+    <div id="tip"></div>
+  </div>
+
+  <div id="depthLabel" class="hidden">下蹲深度</div>
+  <div id="depthWrap" class="hidden"><div id="depthFill"></div></div>
+
+  <div id="cover">
+    <h1>AI <b>Gym</b> Coach</h1>
+    <p>摄像头实时识别你的姿态,用点阵骨架渲染,并自动数深蹲个数。请站到镜头前 1.5–2 米、确保全身(尤其腿部)入镜。</p>
+    <button id="startBtn">开启摄像头,开始</button>
+    <p class="hint">需要授权摄像头。建议使用 Chrome / Edge。隐私:所有识别都在你本机浏览器内完成,画面不会上传。</p>
+    <p class="err hidden" id="errMsg"></p>
+  </div>
+</div>
+
+<!-- Three.js (渲染层) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- MediaPipe Tasks Vision (识别层) -->
+<script type="module">
+import { PoseLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
+
+const video   = document.getElementById('video');
+const canvas  = document.getElementById('overlay');
+const cover   = document.getElementById('cover');
+const startBtn= document.getElementById('startBtn');
+const errMsg  = document.getElementById('errMsg');
+const panel   = document.getElementById('panel');
+const depthWrap=document.getElementById('depthWrap');
+const depthLabel=document.getElementById('depthLabel');
+const depthFill=document.getElementById('depthFill');
+const statusPill=document.getElementById('statusPill');
+const repsEl  = document.getElementById('reps');
+const angleEl = document.getElementById('angleVal');
+const fpsEl   = document.getElementById('fpsVal');
+const stateEl = document.getElementById('stateText');
+const tipEl   = document.getElementById('tip');
+
+let poseLandmarker = null;
+let running = false;
+
+/* ---------- Three.js 点阵骨架渲染层 ---------- */
+// 关节连线(MediaPipe 33 点的关键连接)
+const CONNECTIONS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],      // 肩 + 双臂
+  [11,23],[12,24],[23,24],                      // 躯干
+  [23,25],[25,27],[24,26],[26,28],              // 双腿
+  [27,29],[29,31],[27,31],[28,30],[30,32],[28,32],// 双脚
+  [15,17],[15,19],[15,21],[16,18],[16,20],[16,22]// 手
+];
+const NUM = 33;
+
+let renderer, scene, cam, points, lines, posAttr, lineAttr;
+
+function makeGlowTexture(){
+  const s=64, c=document.createElement('canvas'); c.width=c.height=s;
+  const g=c.getContext('2d');
+  const grd=g.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  grd.addColorStop(0,'rgba(255,255,255,1)');
+  grd.addColorStop(.25,'rgba(120,255,230,.95)');
+  grd.addColorStop(.55,'rgba(25,240,200,.45)');
+  grd.addColorStop(1,'rgba(25,240,200,0)');
+  g.fillStyle=grd; g.fillRect(0,0,s,s);
+  return new THREE.CanvasTexture(c);
+}
+
+function initThree(){
+  renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  resize();
+  scene=new THREE.Scene();
+  // 正交相机:坐标系 x:0→1(左→右), y:0→1(上→下),与图像坐标一致
+  cam=new THREE.OrthographicCamera(0,1,0,1,-10,10);
+
+  // 点
+  const pg=new THREE.BufferGeometry();
+  posAttr=new THREE.BufferAttribute(new Float32Array(NUM*3),3);
+  pg.setAttribute('position',posAttr);
+  const pm=new THREE.PointsMaterial({
+    size:26,map:makeGlowTexture(),transparent:true,
+    depthTest:false,blending:THREE.AdditiveBlending,sizeAttenuation:false
+  });
+  points=new THREE.Points(pg,pm); scene.add(points);
+
+  // 连线
+  const lg=new THREE.BufferGeometry();
+  lineAttr=new THREE.BufferAttribute(new Float32Array(CONNECTIONS.length*2*3),3);
+  lg.setAttribute('position',lineAttr);
+  const lm=new THREE.LineBasicMaterial({
+    color:0x19f0c8,transparent:true,opacity:.65,
+    depthTest:false,blending:THREE.AdditiveBlending
+  });
+  lines=new THREE.LineSegments(lg,lm); scene.add(lines);
+}
+
+function resize(){
+  const w=window.innerWidth,h=window.innerHeight;
+  renderer.setSize(w,h,false);
+}
+window.addEventListener('resize',resize);
+
+const HIDDEN=-100; // 用于隐藏低置信度的点
+function updateSkeleton(lm){
+  const p=posAttr.array;
+  for(let i=0;i<NUM;i++){
+    const k=lm&&lm[i];
+    if(k&&(k.visibility===undefined||k.visibility>0.55)){
+      p[i*3]   = 1-k.x;      // 镜像 x,与镜像视频对齐
+      p[i*3+1] = k.y;        // y 向下
+      p[i*3+2] = -(k.z||0);
+    }else{ p[i*3]=HIDDEN;p[i*3+1]=HIDDEN;p[i*3+2]=0; }
+  }
+  posAttr.needsUpdate=true;
+
+  const l=lineAttr.array;
+  CONNECTIONS.forEach((c,idx)=>{
+    const a=lm&&lm[c[0]], b=lm&&lm[c[1]];
+    const ok=a&&b&&(a.visibility===undefined||a.visibility>0.55)&&(b.visibility===undefined||b.visibility>0.55);
+    const o=idx*6;
+    if(ok){
+      l[o]=1-a.x; l[o+1]=a.y; l[o+2]=-(a.z||0);
+      l[o+3]=1-b.x;l[o+4]=b.y;l[o+5]=-(b.z||0);
+    }else{ for(let j=0;j<6;j++) l[o+j]=HIDDEN; }
+  });
+  lineAttr.needsUpdate=true;
+  renderer.render(scene,cam);
+}
+
+/* ---------- 深蹲计数逻辑 ---------- */
+function angle(a,b,c){ // b 为顶点的夹角(度)
+  const ab={x:a.x-b.x,y:a.y-b.y}, cb={x:c.x-b.x,y:c.y-b.y};
+  const dot=ab.x*cb.x+ab.y*cb.y;
+  const m=Math.hypot(ab.x,ab.y)*Math.hypot(cb.x,cb.y)||1e-6;
+  return Math.acos(Math.max(-1,Math.min(1,dot/m)))*180/Math.PI;
+}
+const DOWN_TH=95, UP_TH=160;   // 角度阈值
+const VIS_TH=0.7;              // 关节可见度门槛:低于此值视为"看不清/被脑补",不计数
+let reps=0, phase='up';        // 状态机: up / down
+function legVis(lm,set){
+  // 取该腿髋/膝/踝三点中最差的可见度
+  return Math.min(
+    (lm[set[0]]&&lm[set[0]].visibility!==undefined)?lm[set[0]].visibility:0,
+    (lm[set[1]]&&lm[set[1]].visibility!==undefined)?lm[set[1]].visibility:0,
+    (lm[set[2]]&&lm[set[2]].visibility!==undefined)?lm[set[2]].visibility:0
+  );
+}
+function processSquat(lm){
+  const L=[23,25,27], R=[24,26,28];
+  const set = legVis(lm,L)>=legVis(lm,R) ? L : R;
+  const vis = legVis(lm,set);
+
+  // 门槛:髋膝踝必须都清晰可见(即全身/至少下半身入镜)才计数
+  if(vis < VIS_TH){
+    phase='up';                 // 复位状态机,避免恢复识别时误加一次
+    depthFill.style.height='0%';
+    return {ready:false, vis};
+  }
+
+  const kneeAng=angle(lm[set[0]],lm[set[1]],lm[set[2]]);
+  if(phase==='up' && kneeAng<DOWN_TH){ phase='down'; }
+  else if(phase==='down' && kneeAng>UP_TH){ phase='up'; reps++; repsEl.textContent=reps; flash(); }
+
+  // 深度条:角度 170→0% , 80→100%
+  const depth=Math.max(0,Math.min(100,(170-kneeAng)/(170-80)*100));
+  depthFill.style.height=depth+'%';
+  return {ready:true, kneeAng, depth, vis};
+}
+function flash(){
+  repsEl.animate([{transform:'scale(1.4)'},{transform:'scale(1)'}],{duration:300,easing:'ease-out'});
+}
+
+/* ---------- 主循环 ---------- */
+let lastT=0, fpsSmooth=0, lastVideoTime=-1;
+function loop(){
+  if(!running) return;
+  const now=performance.now();
+  if(video.readyState>=2 && video.currentTime!==lastVideoTime){
+    lastVideoTime=video.currentTime;
+    const res=poseLandmarker.detectForVideo(video,now);
+    const lm=res.landmarks&&res.landmarks[0];
+    updateSkeleton(lm);
+    if(lm){
+      const r=processSquat(lm);
+      if(r.ready){
+        statusPill.textContent='● LIVE'; statusPill.style.color='var(--accent)';
+        angleEl.textContent=Math.round(r.kneeAng)+'°';
+        if(phase==='down'){ stateEl.textContent='⬇ 下蹲中'; stateEl.style.color='var(--accent)'; }
+        else{ stateEl.textContent='⬆ 站立 · 准备'; stateEl.style.color='#fff'; }
+        // 简单纠错提示
+        if(phase==='down'&&r.kneeAng>DOWN_TH+30) tipEl.textContent='再蹲低一点 💪';
+        else if(r.depth>92) tipEl.textContent='很棒,够深了!';
+        else tipEl.textContent='';
+      }else{
+        // 看不清双腿:暂停计数
+        statusPill.textContent='● 请全身入镜'; statusPill.style.color='var(--warn)';
+        stateEl.textContent='看不清双腿和脚 · 计数已暂停';
+        stateEl.style.color='var(--warn)';
+        tipEl.textContent='请后退,让髋、膝、踝、脚都进入画面';
+        angleEl.textContent='--°';
+      }
+    }else{
+      statusPill.textContent='● 未检测到人'; statusPill.style.color='var(--warn)';
+      stateEl.textContent='没检测到人 · 请站到镜头前';
+      stateEl.style.color='var(--warn)';
+      angleEl.textContent='--°';
+    }
+    // FPS
+    const dt=now-lastT; lastT=now;
+    const fps=1000/dt; fpsSmooth=fpsSmooth?fpsSmooth*.9+fps*.1:fps;
+    fpsEl.textContent=Math.round(fpsSmooth);
+  }else{
+    updateSkeleton(null);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- 启动 ---------- */
+async function start(){
+  startBtn.disabled=true;
+  startBtn.textContent='加载模型中…';
+  cover.querySelector('.hint')&&(cover.querySelector('.hint').textContent='正在下载姿态识别模型(约几 MB),首次稍等…');
+  try{
+    // 1. 摄像头
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:1280,height:720},audio:false});
+    video.srcObject=stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    await video.play();
+
+    // 2. 加载 MediaPipe Pose
+    const vision=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm");
+    poseLandmarker=await PoseLandmarker.createFromOptions(vision,{
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO", numPoses:1
+    });
+
+    // 3. Three.js
+    initThree();
+
+    // 4. UI 切换
+    cover.classList.add('hidden');
+    panel.classList.remove('hidden');
+    depthWrap.classList.remove('hidden');
+    depthLabel.classList.remove('hidden');
+    statusPill.textContent='● LIVE';
+    statusPill.classList.add('live');
+    stateEl.textContent='开始吧!做一个深蹲试试';
+
+    running=true; lastT=performance.now();
+    requestAnimationFrame(loop);
+  }catch(e){
+    console.error(e);
+    startBtn.disabled=false;
+    startBtn.textContent='重试';
+    errMsg.classList.remove('hidden');
+    let msg=e.message||e;
+    if(e.name==='NotAllowedError') msg='摄像头权限被拒绝。请在浏览器地址栏允许摄像头后重试。';
+    else if(location.protocol==='file:') msg='检测到用 file:// 直接打开。部分浏览器会禁止摄像头。若启动失败,请用本地服务器打开(见交付说明)。原始错误:'+msg;
+    errMsg.textContent='启动失败:'+msg;
+  }
+}
+startBtn.addEventListener('click',start);
+</script>
+</body>
+</html>
