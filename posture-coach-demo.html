@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Posture Coach · 坐姿监测 Demo（精度升级版）</title>
+<style>
+  :root{--accent:#19f0c8;--accent2:#3a8dff;--bg:#05080f;--warn:#ffcc4d;--bad:#ff5e6c;}
+  *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  html,body{height:100%;background:var(--bg);color:#fff;overflow:hidden;}
+  #stage{position:fixed;inset:0;}
+  #video{position:absolute;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);filter:brightness(.7) saturate(1.05);}
+  #overlay{position:absolute;width:100%;height:100%;}
+  #hud{position:absolute;top:0;left:0;right:0;padding:18px 22px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:5;}
+  .brand{font-weight:700;letter-spacing:.5px;font-size:15px;}
+  .brand b{color:var(--accent);}
+  .brand span{display:block;font-weight:400;font-size:11px;color:#8aa;letter-spacing:2px;margin-top:2px;}
+  .status-pill{font-size:12px;padding:6px 12px;border:1px solid rgba(255,255,255,.2);border-radius:20px;background:rgba(0,0,0,.35);backdrop-filter:blur(6px);}
+  #panel{position:absolute;left:22px;bottom:26px;z-index:5;background:rgba(5,8,15,.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:18px 22px;min-width:248px;}
+  #score{font-size:54px;font-weight:800;line-height:1;}
+  #score-label{font-size:12px;color:#8aa;letter-spacing:3px;margin-top:4px;}
+  .bars{margin-top:14px;display:flex;flex-direction:column;gap:10px;}
+  .bar-row{font-size:11px;color:#9ab;}
+  .bar-row .top{display:flex;justify-content:space-between;margin-bottom:3px;}
+  .track{height:7px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden;}
+  .fill{height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .12s linear,background .2s;}
+  #stateText{font-size:13px;margin-top:14px;font-weight:600;}
+  #handState{font-size:12px;color:var(--warn);margin-top:5px;min-height:15px;}
+  #calibBtn{margin-top:12px;width:100%;padding:10px;font-size:13px;font-weight:700;color:#03110d;background:linear-gradient(120deg,var(--accent),var(--accent2));border:none;border-radius:12px;cursor:pointer;}
+  #calibBtn:active{transform:scale(.98);}
+  #calibBtn.recal{background:rgba(255,255,255,.12);color:#fff;}
+  #sndBtn{position:absolute;right:22px;bottom:26px;z-index:5;font-size:12px;padding:8px 14px;border-radius:20px;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.35);color:#fff;cursor:pointer;}
+  #alert{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:8;background:rgba(255,94,108,.18);border:2px solid var(--bad);color:#fff;padding:22px 40px;border-radius:20px;text-align:center;backdrop-filter:blur(4px);display:none;}
+  #alert.show{display:block;animation:pulse 1s ease-in-out infinite;}
+  #alert .big{font-size:34px;font-weight:800;}
+  #alert .sub{font-size:14px;color:#ffd2d6;margin-top:6px;}
+  @keyframes pulse{0%,100%{transform:translate(-50%,-50%) scale(1);opacity:.92;}50%{transform:translate(-50%,-50%) scale(1.05);opacity:1;}}
+  #vignette{position:absolute;inset:0;z-index:6;pointer-events:none;box-shadow:inset 0 0 0 0 rgba(255,94,108,0);transition:box-shadow .3s;}
+  #vignette.bad{box-shadow:inset 0 0 140px 20px rgba(255,94,108,.5);}
+  #cover{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:radial-gradient(circle at 50% 40%,#0a1424,#05080f);gap:16px;padding:30px;}
+  #cover h1{font-size:26px;font-weight:800;}
+  #cover h1 b{color:var(--accent);}
+  #cover p{color:#9ab;font-size:14px;max-width:460px;line-height:1.6;}
+  #startBtn{margin-top:8px;padding:14px 34px;font-size:16px;font-weight:700;color:#03110d;background:linear-gradient(120deg,var(--accent),var(--accent2));border:none;border-radius:30px;cursor:pointer;box-shadow:0 8px 30px rgba(25,240,200,.3);}
+  #startBtn:active{transform:scale(.97);}
+  .hint{font-size:12px;color:#678;max-width:460px;line-height:1.6;}
+  .err{color:#ff7a7a;font-size:13px;max-width:460px;line-height:1.6;}
+  .hidden{display:none!important;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div id="vignette"></div>
+
+  <div id="hud">
+    <div class="brand">AI <b>POSTURE</b> COACH<span>SIT · v2 · 3D ANGLE</span></div>
+    <div class="status-pill" id="statusPill">待启动</div>
+  </div>
+
+  <div id="alert">
+    <div class="big">坐直 🪑</div>
+    <div class="sub" id="alertSub">检测到驼背,挺直腰背、抬起头</div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div id="score" style="color:var(--accent)">--</div>
+    <div id="score-label">POSTURE · 姿态评分</div>
+    <div class="bars">
+      <div class="bar-row"><div class="top"><span>颈部前倾角</span><span id="neckVal">--</span></div><div class="track"><div class="fill" id="neckBar"></div></div></div>
+      <div class="bar-row"><div class="top"><span>躯干前倾角</span><span id="torsoVal">--</span></div><div class="track"><div class="fill" id="torsoBar"></div></div></div>
+      <div class="bar-row"><div class="top"><span>身体下沉</span><span id="sinkVal">--</span></div><div class="track"><div class="fill" id="sinkBar"></div></div></div>
+    </div>
+    <div id="stateText">请坐直后点击下方校准</div>
+    <div id="handState"></div>
+    <button id="calibBtn">坐直,点此校准基准</button>
+  </div>
+
+  <button id="sndBtn" class="hidden">🔔 提示音:开</button>
+
+  <div id="cover">
+    <h1>AI <b>Posture</b> Coach <span style="font-size:14px;color:var(--accent)">v2</span></h1>
+    <p>前置摄像头识别你的全身骨架与手部,用 3D 角度判断驼背、低头、弯腰前倾;手扶脸、被遮挡也能稳定识别。坐到桌前,尽量让头、肩(最好连髋部)入镜。</p>
+    <button id="startBtn">开启摄像头,开始</button>
+    <p class="hint">需要授权摄像头。建议 Chrome / Edge。识别全部在本机完成,画面不上传。启动后先坐直,点一次"校准"(会采集约 1 秒取平均)。</p>
+    <p class="err hidden" id="errMsg"></p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="module">
+import { PoseLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
+
+const $=id=>document.getElementById(id);
+const video=$('video'),canvas=$('overlay'),cover=$('cover'),startBtn=$('startBtn'),errMsg=$('errMsg'),
+  panel=$('panel'),statusPill=$('statusPill'),scoreEl=$('score'),stateEl=$('stateText'),handStateEl=$('handState'),
+  calibBtn=$('calibBtn'),sndBtn=$('sndBtn'),alertBox=$('alert'),alertSub=$('alertSub'),vignette=$('vignette'),
+  neckBar=$('neckBar'),torsoBar=$('torsoBar'),neckValEl=$('neckVal'),torsoValEl=$('torsoVal'),
+  sinkBar=$('sinkBar'),sinkValEl=$('sinkVal');
+
+let poseLandmarker=null,running=false,soundOn=true,audioCtx=null;
+
+/* ================= Three.js 全身骨架渲染 ================= */
+const CONNECTIONS=[
+  [0,2],[2,7],[0,5],[5,8],[9,10],                 // 脸
+  [11,12],[11,23],[12,24],[23,24],                // 躯干
+  [11,13],[13,15],[12,14],[14,16],                // 双臂
+  [15,17],[15,19],[15,21],[17,19],[16,18],[16,20],[16,22],[18,20], // 双手
+  [23,25],[25,27],[24,26],[26,28],                // 双腿
+  [27,29],[27,31],[29,31],[28,30],[28,32],[30,32] // 双脚
+];
+const NUM=33,HIDDEN=-100,VR=0.5;
+let renderer,scene,cam,points,lines,posAttr,lineAttr;
+function makeGlowTexture(){
+  const s=64,c=document.createElement('canvas');c.width=c.height=s;
+  const g=c.getContext('2d'),grd=g.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  grd.addColorStop(0,'rgba(255,255,255,1)');grd.addColorStop(.25,'rgba(120,255,230,.95)');
+  grd.addColorStop(.55,'rgba(25,240,200,.45)');grd.addColorStop(1,'rgba(25,240,200,0)');
+  g.fillStyle=grd;g.fillRect(0,0,s,s);return new THREE.CanvasTexture(c);
+}
+function initThree(){
+  renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));resize();
+  scene=new THREE.Scene();cam=new THREE.OrthographicCamera(0,1,0,1,-10,10);
+  const pg=new THREE.BufferGeometry();
+  posAttr=new THREE.BufferAttribute(new Float32Array(NUM*3),3);pg.setAttribute('position',posAttr);
+  points=new THREE.Points(pg,new THREE.PointsMaterial({size:22,map:makeGlowTexture(),transparent:true,depthTest:false,blending:THREE.AdditiveBlending,sizeAttenuation:false}));
+  scene.add(points);
+  const lg=new THREE.BufferGeometry();
+  lineAttr=new THREE.BufferAttribute(new Float32Array(CONNECTIONS.length*2*3),3);lg.setAttribute('position',lineAttr);
+  lines=new THREE.LineSegments(lg,new THREE.LineBasicMaterial({color:0x19f0c8,transparent:true,opacity:.6,depthTest:false,blending:THREE.AdditiveBlending}));
+  scene.add(lines);
+}
+function resize(){renderer.setSize(window.innerWidth,window.innerHeight,false);}
+window.addEventListener('resize',resize);
+function vok(lm,i){return lm&&lm[i]&&(lm[i].visibility===undefined||lm[i].visibility>VR);}
+function updateSkeleton(lm,bad){
+  const p=posAttr.array;
+  for(let i=0;i<NUM;i++){
+    if(vok(lm,i)){p[i*3]=1-lm[i].x;p[i*3+1]=lm[i].y;p[i*3+2]=-(lm[i].z||0);}
+    else{p[i*3]=HIDDEN;p[i*3+1]=HIDDEN;p[i*3+2]=0;}
+  }
+  posAttr.needsUpdate=true;
+  const l=lineAttr.array;
+  CONNECTIONS.forEach((c,idx)=>{
+    const o=idx*6,ok=vok(lm,c[0])&&vok(lm,c[1]);
+    if(ok){const a=lm[c[0]],b=lm[c[1]];l[o]=1-a.x;l[o+1]=a.y;l[o+2]=-(a.z||0);l[o+3]=1-b.x;l[o+4]=b.y;l[o+5]=-(b.z||0);}
+    else{for(let j=0;j<6;j++)l[o+j]=HIDDEN;}
+  });
+  lineAttr.needsUpdate=true;
+  if(lines) lines.material.color.setHex(bad?0xff5e6c:0x19f0c8);
+  renderer.render(scene,cam);
+}
+
+/* ================= 3D 向量与角度工具 ================= */
+const sub=(a,b)=>({x:a.x-b.x,y:a.y-b.y,z:a.z-b.z});
+const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2});
+const len=a=>Math.hypot(a.x,a.y,a.z)||1e-6;
+const dot=(a,b)=>a.x*b.x+a.y*b.y+a.z*b.z;
+const angBetween=(a,b)=>Math.acos(Math.max(-1,Math.min(1,dot(a,b)/(len(a)*len(b)))))*180/Math.PI;
+const WORLD_UP={x:0,y:-1,z:0}; // MediaPipe 世界坐标 y 轴向下,故"上"为 -y
+
+/* ================= 姿态测量(基于世界坐标的角度) ================= */
+// 关键点: 0鼻 2左眼 5右眼 7左耳 8右耳 11左肩 12右肩 15/16腕 23/24髋
+function measure(lm,wl){
+  if(!(vok(lm,11)&&vok(lm,12)&&vok(lm,0))) return null;  // 至少要有双肩+鼻
+  // 头部中心:取所有可见的头部点(抗手挡耳朵)
+  let hc={x:0,y:0,z:0},n=0;
+  [0,2,5,7,8].forEach(i=>{ if(vok(lm,i)){hc.x+=wl[i].x;hc.y+=wl[i].y;hc.z+=wl[i].z;n++;} });
+  hc={x:hc.x/n,y:hc.y/n,z:hc.z/n};
+  const sc=mid(wl[11],wl[12]);                              // 肩中心
+  const hipsOK=vok(lm,23)&&vok(lm,24);
+  const hipc=hipsOK?mid(wl[23],wl[24]):null;
+  // 颈部前倾角:肩→头 相对 躯干方向(无髋则相对竖直)。隔离纯颈部/头部前倾
+  const ref=hipsOK?sub(sc,hipc):WORLD_UP;
+  const neckAngle=angBetween(sub(hc,sc),ref);
+  // 躯干前倾角:髋→肩 相对竖直(弯腰核心指标,需髋部入镜)
+  const torsoAngle=hipsOK?angBetween(sub(sc,hipc),WORLD_UP):null;
+  // 手扶脸(2D,用肩宽归一化距离)
+  const sw=Math.hypot(lm[11].x-lm[12].x,lm[11].y-lm[12].y)||1e-6;
+  let handDist=99;
+  [15,16].forEach(i=>{ if(vok(lm,i)){ handDist=Math.min(handDist,Math.hypot(lm[i].x-lm[0].x,lm[i].y-lm[0].y)/sw);} });
+  // 图像空间(归一化 0~1)的头/肩竖直位置 —— 用于"整体下沉/瘫坐"检测(角度无法捕捉的平移)
+  const syImg=(lm[11].y+lm[12].y)/2, nyImg=lm[0].y;
+  return {neckAngle,torsoAngle,hipsOK,sw,syImg,nyImg,handNear:handDist<1.05,fullBody:hipsOK&&vok(lm,25)&&vok(lm,26)};
+}
+
+/* ================= 平滑 ================= */
+const A=0.35; let sm=null;
+function smooth(m){
+  if(!sm){ sm={neckAngle:m.neckAngle,torsoAngle:m.torsoAngle,sw:m.sw,syImg:m.syImg,nyImg:m.nyImg}; }
+  else{
+    sm.neckAngle=sm.neckAngle*(1-A)+m.neckAngle*A;
+    sm.sw=sm.sw*(1-A)+m.sw*A;
+    sm.syImg=sm.syImg*(1-A)+m.syImg*A;
+    sm.nyImg=sm.nyImg*(1-A)+m.nyImg*A;
+    if(m.torsoAngle!=null) sm.torsoAngle = sm.torsoAngle==null?m.torsoAngle:sm.torsoAngle*(1-A)+m.torsoAngle*A;
+    else sm.torsoAngle=null;
+  }
+  sm.handNear=m.handNear; sm.hipsOK=m.hipsOK; sm.fullBody=m.fullBody;
+  return sm;
+}
+
+/* ================= 评估 + 提醒状态机 ================= */
+const NECK_TH=11, NECK_REC=6, TORSO_TH=13, TORSO_REC=7, LEAN_TH=1.20;
+const SINK_TH=0.05, SINK_REC=0.025; // 下沉量阈值(占画面高度比例)
+const HOLD_MS=1500;
+let baseline=null, badSince=null, alerting=false, lastBeep=0;
+
+function evaluate(s){
+  const dNeck=s.neckAngle-baseline.neckAngle;
+  const dTorso=(s.torsoAngle!=null&&baseline.torsoAngle!=null)?s.torsoAngle-baseline.torsoAngle:null;
+  const lean=baseline.sw?s.sw/baseline.sw:1;
+  // 下沉量:肩线与头部相对校准位置往下移了多少(取更显著者);用肩宽比排除"往后远离镜头"的误判
+  const sinkRaw=Math.max(s.syImg-baseline.syImg, (s.nyImg-baseline.nyImg)*0.85);
+  const sink=lean>0.85?sinkRaw:0;            // 明显变小(远离)时不算下沉
+  const slouch=dNeck>NECK_TH;
+  const bending=dTorso!=null&&dTorso>TORSO_TH;
+  const sinking=sink>SINK_TH;
+  const tooClose=lean>LEAN_TH;
+  const bad=slouch||bending||sinking||(tooClose&&dNeck>NECK_REC);
+  return {dNeck,dTorso,lean,sink,slouch,bending,sinking,tooClose,bad};
+}
+function beep(){
+  if(!soundOn||!audioCtx) return;
+  const now=performance.now(); if(now-lastBeep<1800) return; lastBeep=now;
+  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+  o.type='sine';o.frequency.value=660;
+  g.gain.setValueAtTime(.0001,audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(.25,audioCtx.currentTime+.03);
+  g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+.4);
+  o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.42);
+}
+function setAlert(on,reason){
+  if(on&&!alerting){alerting=true;alertBox.classList.add('show');vignette.classList.add('bad');beep();}
+  else if(!on&&alerting){alerting=false;alertBox.classList.remove('show');vignette.classList.remove('bad');}
+  if(on&&reason) alertSub.textContent=reason;
+}
+const barFromDelta=(d,th)=>Math.max(0,Math.min(100,100-(Math.max(0,d)/th)*65));
+
+/* ================= 校准(采集 ~30 帧取平均) ================= */
+const calib={collecting:false,samples:[]};
+calibBtn.addEventListener('click',()=>{ calib.collecting=true; calib.samples=[]; });
+sndBtn.addEventListener('click',()=>{soundOn=!soundOn;sndBtn.textContent=soundOn?'🔔 提示音:开':'🔕 提示音:关';});
+
+/* ================= 主循环 ================= */
+let lastVideoTime=-1;
+function loop(){
+  if(!running) return;
+  const now=performance.now();
+  if(video.readyState>=2 && video.currentTime!==lastVideoTime){
+    lastVideoTime=video.currentTime;
+    const res=poseLandmarker.detectForVideo(video,now);
+    const lm=res.landmarks&&res.landmarks[0];
+    const wl=res.worldLandmarks&&res.worldLandmarks[0];
+    const m=(lm&&wl)?measure(lm,wl):null;
+
+    if(!m){
+      updateSkeleton(lm,false);
+      statusPill.textContent='● 请正对镜头';statusPill.style.color='var(--warn)';
+      stateEl.textContent='看不清头和肩 · 请正对摄像头坐好';stateEl.style.color='var(--warn)';
+      handStateEl.textContent='';scoreEl.textContent='--';neckValEl.textContent='--';torsoValEl.textContent='--';sinkValEl.textContent='--';
+      neckBar.style.width='0%';torsoBar.style.width='0%';sinkBar.style.width='0%';badSince=null;setAlert(false);sm=null;
+      requestAnimationFrame(loop);return;
+    }
+
+    const s=smooth(m);
+    handStateEl.textContent=s.handNear?'✋ 手部靠近面部(扶脸/托腮)':'';
+
+    // 校准采集
+    if(calib.collecting){
+      calib.samples.push(m);
+      stateEl.textContent=`校准中… 保持坐直 ${calib.samples.length}/30`;stateEl.style.color='#fff';
+      if(calib.samples.length>=30){
+        const arr=calib.samples,avg=k=>{const v=arr.map(x=>x[k]).filter(x=>x!=null);return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;};
+        baseline={neckAngle:avg('neckAngle'),torsoAngle:avg('torsoAngle'),sw:avg('sw'),syImg:avg('syImg'),nyImg:avg('nyImg')};
+        calib.collecting=false;badSince=null;setAlert(false);
+        calibBtn.textContent='重新校准';calibBtn.classList.add('recal');
+        stateEl.textContent='✅ 已记录标准坐姿';stateEl.style.color='var(--accent)';
+      }
+      updateSkeleton(lm,false);requestAnimationFrame(loop);return;
+    }
+
+    if(!baseline){
+      updateSkeleton(lm,false);
+      statusPill.textContent='● 待校准';statusPill.style.color='var(--warn)';
+      stateEl.textContent='请坐直后点击下方"校准基准"';stateEl.style.color='#fff';
+      scoreEl.textContent='--';scoreEl.style.color='#fff';
+      neckValEl.textContent=Math.round(s.neckAngle)+'°';
+      torsoValEl.textContent=s.torsoAngle!=null?Math.round(s.torsoAngle)+'°':'需露髋';
+      sinkValEl.textContent='待校准';
+      requestAnimationFrame(loop);return;
+    }
+
+    const ev=evaluate(s);
+    // 指标条
+    neckBar.style.width=barFromDelta(ev.dNeck,NECK_TH)+'%';
+    neckValEl.textContent=(ev.dNeck>=0?'+':'')+Math.round(ev.dNeck)+'°';
+    neckBar.style.background=ev.slouch?'var(--bad)':'linear-gradient(90deg,var(--accent2),var(--accent))';
+    if(ev.dTorso!=null){
+      torsoBar.style.width=barFromDelta(ev.dTorso,TORSO_TH)+'%';
+      torsoValEl.textContent=(ev.dTorso>=0?'+':'')+Math.round(ev.dTorso)+'°';
+      torsoBar.style.background=ev.bending?'var(--bad)':'linear-gradient(90deg,var(--accent2),var(--accent))';
+    }else{ torsoBar.style.width='0%';torsoValEl.textContent='需露髋'; }
+    // 下沉条
+    sinkBar.style.width=barFromDelta(ev.sink,SINK_TH)+'%';
+    sinkValEl.textContent=(ev.sink>0?'+':'')+Math.round(ev.sink*100)+'%';
+    sinkBar.style.background=ev.sinking?'var(--bad)':'linear-gradient(90deg,var(--accent2),var(--accent))';
+    // 评分
+    const penalty=Math.max(0,ev.dNeck)*2.4+Math.max(0,(ev.dTorso||0))*2.4+Math.max(0,ev.sink*420)+Math.max(0,(ev.lean-1)*110);
+    const score=Math.round(Math.max(0,Math.min(100,100-penalty)));
+    scoreEl.textContent=score;scoreEl.style.color=ev.bad?'var(--bad)':'var(--accent)';
+
+    // 提醒(持续 HOLD_MS,迟滞恢复)
+    if(ev.bad){
+      if(badSince===null) badSince=now;
+      let reason;
+      if(ev.sinking&&ev.slouch) reason='瘫坐下沉又驼背,坐起来、把腰背挺直坐到椅子深处';
+      else if(ev.sinking) reason='身体瘫坐下沉了,坐起来、坐到椅子深处挺直腰背';
+      else if(ev.bending&&ev.slouch) reason='弯腰又驼背,坐直、挺起上半身';
+      else if(ev.bending) reason='上半身前倾过多,坐直靠回椅背';
+      else if(ev.slouch) reason='检测到驼背低头,挺直腰背、抬起头';
+      else reason='离屏幕太近,身体往后坐一点';
+      if(now-badSince>=HOLD_MS) setAlert(true,reason);
+      stateEl.textContent=alerting?'⚠ 姿势不良':'⬇ 姿势偏离…';stateEl.style.color='var(--warn)';
+    }else{
+      const recovered=(ev.dNeck<NECK_REC)&&(ev.dTorso==null||ev.dTorso<TORSO_REC)&&ev.sink<SINK_REC&&ev.lean<LEAN_TH;
+      if(recovered){badSince=null;setAlert(false);}
+      if(!alerting){stateEl.textContent=s.fullBody?'✅ 坐姿良好(全身已识别)':'✅ 坐姿良好,保持';stateEl.style.color='var(--accent)';}
+    }
+    updateSkeleton(lm,ev.bad);
+    statusPill.textContent='● 监测中';statusPill.style.color='var(--accent)';
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ================= 启动 ================= */
+async function start(){
+  startBtn.disabled=true;startBtn.textContent='加载模型中…(full 模型稍大,请稍候)';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:1280,height:720},audio:false});
+    video.srcObject=stream;await new Promise(r=>video.onloadedmetadata=r);await video.play();
+    const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm");
+    poseLandmarker=await PoseLandmarker.createFromOptions(vision,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",delegate:"GPU"},
+      runningMode:"VIDEO",numPoses:1,
+      minPoseDetectionConfidence:0.6,minPosePresenceConfidence:0.6,minTrackingConfidence:0.6
+    });
+    initThree();
+    try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}
+    cover.classList.add('hidden');panel.classList.remove('hidden');sndBtn.classList.remove('hidden');
+    statusPill.textContent='● 待校准';statusPill.style.color='var(--warn)';
+    running=true;requestAnimationFrame(loop);
+  }catch(e){
+    console.error(e);startBtn.disabled=false;startBtn.textContent='重试';errMsg.classList.remove('hidden');
+    let msg=e.message||e;
+    if(e.name==='NotAllowedError') msg='摄像头权限被拒绝,请在地址栏允许后重试。';
+    else if(location.protocol==='file:') msg='检测到用 file:// 打开,部分浏览器会禁止摄像头。若失败请用本地服务器打开(见说明)。原始错误:'+msg;
+    errMsg.textContent='启动失败:'+msg;
+  }
+}
+startBtn.addEventListener('click',start);
+</script>
+</body>
+</html>
